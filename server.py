@@ -14,7 +14,7 @@ app = Flask(__name__)
 # Configure CORS properly
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:5173"],  # Your React app's URL
+        "origins": ["https://retinopathy-murex.vercel.app"],  # Your React app's URL
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
         "supports_credentials": True
