@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # Backend API Service
+  retinopathy-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: retinopathy-api
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=development
+      - FLASK_APP=server.py
+      - MONGODB_URI=${MONGODB_URI}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    volumes:
+      - .:/app
+      - /app/__pycache__
+    networks:
+      - retinopathy-network
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+
+  # MongoDB Service (Optional - if you want local MongoDB)
+  mongodb:
+    image: mongo:6.0
+    container_name: retinopathy-mongo
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password123
+      - MONGO_INITDB_DATABASE=retinopathy
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - retinopathy-network
+    restart: unless-stopped
+
+  # Redis for caching (Optional)
+  redis:
+    image: redis:7-alpine
+    container_name: retinopathy-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - retinopathy-network
+    restart: unless-stopped
+
+networks:
+  retinopathy-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:

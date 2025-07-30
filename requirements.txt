@@ -24,8 +24,7 @@ protobuf==4.24.4
 h5py==3.9.0
 
 # Utility Libraries
-bson==0.5.10
-secure-filename==0.1
+# Note: bson is included with pymongo, no need for separate bson package
 
 # Development and Testing (Optional)
 pytest==7.4.2

@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # Production Backend API Service
+  retinopathy-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: retinopathy-api-prod
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - FLASK_APP=server.py
+      - MONGODB_URI=${MONGODB_URI}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    networks:
+      - retinopathy-network
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+
+  # Nginx Reverse Proxy (Optional)
+  nginx:
+    image: nginx:alpine
+    container_name: retinopathy-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    networks:
+      - retinopathy-network
+    depends_on:
+      - retinopathy-backend
+    restart: always
+
+networks:
+  retinopathy-network:
+    driver: bridge
