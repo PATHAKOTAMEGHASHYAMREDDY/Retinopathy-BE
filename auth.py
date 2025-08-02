@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
-from datetime import timedelta
+from datetime import timedelta, datetime
 import os
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -124,14 +124,29 @@ def add_test():
         if not data:
             return jsonify({'message': 'No test data provided'}), 400
 
+        # Validate required fields
+        required_fields = ['date', 'result', 'confidence', 'status', 'recommendations']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'message': f'Missing required field: {field}'}), 400
+
+        # Validate data types
+        if not isinstance(data['confidence'], (int, float)):
+            return jsonify({'message': 'Confidence must be a number'}), 400
+        if not isinstance(data['recommendations'], list):
+            return jsonify({'message': 'Recommendations must be a list'}), 400
+
         # Create test record
         test_data = {
             'user_id': ObjectId(current_user_id),
             'date': data['date'],
             'result': data['result'],
-            'confidence': data['confidence'],
+            'confidence': float(data['confidence']),
             'status': data['status'],
-            'recommendations': data['recommendations']
+            'recommendations': data['recommendations'],
+            'cloudinaryUrl': data.get('cloudinaryUrl'),
+            'cloudinaryPublicId': data.get('cloudinaryPublicId'),
+            'created_at': datetime.utcnow()
         }
 
         # Insert test into tests collection
@@ -151,7 +166,11 @@ def add_test():
             'test_id': str(test_result.inserted_id)
         }), 201
 
+    except ValueError as e:
+        print(f"Value Error in add_test: {str(e)}")
+        return jsonify({'message': 'Invalid data format', 'error': str(e)}), 400
     except Exception as e:
+        print(f"Error in add_test: {str(e)}")
         return jsonify({'message': 'Error adding test', 'error': str(e)}), 500
 
 @auth.route('/get-tests', methods=['GET'])

@@ -7,15 +7,70 @@ from werkzeug.utils import secure_filename
 import cv2
 import tensorflow as tf
 from tensorflow.keras.models import load_model
+import threading
+import time
 
 # Create blueprint
 retino_blueprint = Blueprint('retino', __name__)
 
-# Load model
-MODEL_PATH = os.path.join(os.path.dirname(__file__), 'model', 'diabetic-retino-model.h5')
-print(f"Loading model from: {MODEL_PATH}")  # Debug print
-model = load_model(MODEL_PATH, compile=False)
-model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+# Global model variable
+model = None
+model_lock = threading.Lock()
+model_loaded = False
+
+def load_model_optimized():
+    """Load and optimize the model for faster inference"""
+    global model, model_loaded
+    
+    try:
+        MODEL_PATH = os.path.join(os.path.dirname(__file__), 'model', 'diabetic-retino-model.h5')
+        print(f"Loading model from: {MODEL_PATH}")
+        
+        # Configure TensorFlow for optimal performance
+        tf.config.threading.set_inter_op_parallelism_threads(0)  # Use all available cores
+        tf.config.threading.set_intra_op_parallelism_threads(0)  # Use all available cores
+        
+        # Load model without compilation for faster loading
+        model = load_model(MODEL_PATH, compile=False)
+        
+        # Compile with optimized settings
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+            loss='binary_crossentropy',
+            metrics=['accuracy'],
+            run_eagerly=False  # Use graph mode for better performance
+        )
+        
+        # Warm up the model with a dummy prediction to initialize all layers
+        print("Warming up model...")
+        dummy_input = np.random.random((1, 224, 224, 3)).astype(np.float32)
+        _ = model.predict(dummy_input, verbose=0)
+        
+        model_loaded = True
+        print("Model loaded and warmed up successfully!")
+        
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        model_loaded = False
+
+def ensure_model_loaded():
+    """Ensure model is loaded before making predictions"""
+    global model, model_loaded
+    
+    if not model_loaded:
+        with model_lock:
+            if not model_loaded:  # Double-check locking pattern
+                load_model_optimized()
+    
+    return model_loaded
+
+# Load model on import (but in a separate thread to not block startup)
+def background_model_load():
+    load_model_optimized()
+
+# Start loading model in background
+model_thread = threading.Thread(target=background_model_load, daemon=True)
+model_thread.start()
 
 def is_regular_photo(image):
     img_array = np.array(image)
@@ -82,20 +137,50 @@ def is_fundus_image(image):
 
 def predict_image(image):
     try:
+        # Ensure model is loaded
+        if not ensure_model_loaded():
+            return None, "Model not loaded. Please try again."
+        
         is_valid, message = is_fundus_image(image)
         if not is_valid:
             return None, message
             
-        # Preprocess image
-        img = image.resize((224, 224))
-        img_array = np.array(img) / 255.0
+        # Optimized image preprocessing
+        img = image.resize((224, 224), Image.LANCZOS)  # Use LANCZOS for better quality
+        img_array = np.array(img, dtype=np.float32) / 255.0  # Use float32 for better performance
         image_tensor = np.expand_dims(img_array, axis=0)
         
-        # Make prediction
-        prediction = model.predict(image_tensor, verbose=0)
+        # Make prediction with optimized settings
+        with tf.device('/CPU:0'):  # Ensure CPU usage for consistency
+            prediction = model.predict(image_tensor, verbose=0, batch_size=1)
+        
         return float(prediction[0][0]), "Prediction successful"
     except Exception as e:
         return None, str(e)
+
+# Add model warmup endpoint for faster first prediction
+@retino_blueprint.route('/warmup', methods=['GET', 'POST'])
+def warmup_model():
+    """Endpoint to warm up the model for faster predictions"""
+    try:
+        if ensure_model_loaded():
+            # Perform a dummy prediction to warm up the model
+            dummy_input = np.random.random((1, 224, 224, 3)).astype(np.float32)
+            _ = model.predict(dummy_input, verbose=0)
+            return jsonify({'status': 'Model warmed up successfully'}), 200
+        else:
+            return jsonify({'error': 'Model not loaded'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Add model status endpoint
+@retino_blueprint.route('/model-status', methods=['GET'])
+def model_status():
+    """Check if model is loaded and ready"""
+    return jsonify({
+        'model_loaded': model_loaded,
+        'status': 'ready' if model_loaded else 'loading'
+    }), 200
 
 @retino_blueprint.route('/analyze', methods=['POST', 'OPTIONS'])
 def analyze():
@@ -105,6 +190,10 @@ def analyze():
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'POST')
         return response
+    
+    # Check if model is ready before processing
+    if not model_loaded:
+        return jsonify({'error': 'Model is still loading. Please try again in a few seconds.'}), 503
         
     if 'image' not in request.files:
         return jsonify({'error': 'No image part'}), 400
@@ -114,8 +203,19 @@ def analyze():
         return jsonify({'error': 'No selected file'}), 400
     
     try:
-        image = Image.open(file.stream).convert("RGB")
+        # Optimized image loading
+        start_time = time.time()
+        
+        # Load image with optimized settings
+        image = Image.open(file.stream)
+        if image.mode != 'RGB':
+            image = image.convert("RGB")
+        
+        # Fast prediction
         result, message = predict_image(image)
+        
+        processing_time = time.time() - start_time
+        print(f"Prediction completed in {processing_time:.2f} seconds")
         
         if result is None:
             return jsonify({'error': message}), 400
@@ -127,6 +227,7 @@ def analyze():
         response = {
             'stage': 'DR Detected' if is_dr_detected else 'No DR Detected',
             'confidence': round(actual_confidence, 2),
+            'processing_time': round(processing_time, 2),
             'recommendations': [
                 'Schedule immediate consultation' if is_dr_detected else 'Schedule routine check-up in 12 months',
                 'Monitor blood sugar levels regularly',
@@ -137,4 +238,5 @@ def analyze():
         return jsonify(response), 200
         
     except Exception as e:
+        print(f"Error in analysis: {str(e)}")
         return jsonify({'error': str(e)}), 500
