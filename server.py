@@ -20,7 +20,6 @@ CORS(app, resources={
         "supports_credentials": True
     }
 })
-
 # Configure Flask-JWT-Extended
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key')  # Change this in production
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=1)
